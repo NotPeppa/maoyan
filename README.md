@@ -7,7 +7,6 @@
 需要 Node.js 22.13 或更高版本。
 
 ```bash
-cd site
 npm install
 cp .env.example .env.local
 ```
