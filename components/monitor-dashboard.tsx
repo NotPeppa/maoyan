@@ -137,14 +137,14 @@ export function MonitorDashboard() {
       setMessage(error instanceof Error ? error.message : '加载失败'),
     );
     const timer = window.setInterval(
-      () => void refreshAll(false).catch(() => undefined),
+      () => void loadMonitors().catch(() => undefined),
       CHECK_INTERVAL_MS,
     );
     return () => {
       mounted.current = false;
       window.clearInterval(timer);
     };
-  }, [loadMonitors, refreshAll]);
+  }, [loadMonitors]);
 
   useEffect(() => {
     const context = document.modelContext;
