@@ -3,8 +3,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Activity,
+  AlertCircle,
   BellRing,
+  BellOff,
+  CheckCircle2,
   ExternalLink,
+  History,
   LoaderCircle,
   LogOut,
   Plus,
@@ -29,6 +33,20 @@ type Monitor = {
   available: number;
   lastCheckedAt: string;
   lastError: string | null;
+};
+
+type NotificationHistory = {
+  id: number;
+  monitorId: number;
+  projectId: string;
+  name: string;
+  sourceUrl: string;
+  previousButtonText: string | null;
+  buttonText: string;
+  available: number;
+  sentAt: string;
+  status: 'sent' | 'skipped' | 'failed';
+  error: string | null;
 };
 
 type ModelContext = {
@@ -63,6 +81,17 @@ function relativeTime(value: string) {
   return `${Math.floor(seconds / 60)} 分钟前检查`;
 }
 
+function formatTime(value: string) {
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).format(new Date(value));
+}
+
 async function readJson<T>(response: Response): Promise<T> {
   const body = (await response.json()) as T & { error?: string };
   if (!response.ok) throw new Error(body.error || '请求失败');
@@ -71,6 +100,7 @@ async function readJson<T>(response: Response): Promise<T> {
 
 export function MonitorDashboard() {
   const [monitors, setMonitors] = useState<Monitor[]>([]);
+  const [notifications, setNotifications] = useState<NotificationHistory[]>([]);
   const [url, setUrl] = useState('');
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
@@ -78,13 +108,19 @@ export function MonitorDashboard() {
   const mounted = useRef(true);
 
   const loadMonitors = useCallback(async () => {
-    const body = await readJson<{
-      monitors: Monitor[];
-      notificationEnabled: boolean;
-    }>(await fetch('/api/monitors'));
+    const [body, history] = await Promise.all([
+      readJson<{
+        monitors: Monitor[];
+        notificationEnabled: boolean;
+      }>(await fetch('/api/monitors')),
+      readJson<{ notifications: NotificationHistory[] }>(
+        await fetch('/api/notifications?limit=50'),
+      ),
+    ]);
     if (mounted.current) {
       setMonitors(body.monitors);
       setNotificationEnabled(body.notificationEnabled);
+      setNotifications(history.notifications);
     }
     return body.monitors;
   }, []);
@@ -120,6 +156,10 @@ export function MonitorDashboard() {
         setMonitors(body.monitors);
         setNotificationEnabled(body.notificationEnabled);
       }
+      const history = await readJson<{ notifications: NotificationHistory[] }>(
+        await fetch('/api/notifications?limit=50'),
+      );
+      if (mounted.current) setNotifications(history.notifications);
       if (announce) setMessage('已完成全部检查');
       return { refreshed: body.monitors.length };
     } catch (error) {
@@ -417,6 +457,99 @@ export function MonitorDashboard() {
                       >
                         <Trash2 className="size-4" />
                       </Button>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          )}
+        </section>
+
+        <section aria-labelledby="notification-history-title" className="mt-12">
+          <div className="mb-4">
+            <div className="flex items-center gap-2">
+              <History className="size-4 text-primary" />
+              <h2
+                id="notification-history-title"
+                className="font-heading text-xl font-semibold"
+              >
+                WxPusher 通知历史
+              </h2>
+            </div>
+            <p className="mt-1 text-sm text-muted-foreground">
+              最近 {notifications.length} 条推送记录
+            </p>
+          </div>
+
+          {notifications.length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-white/12 bg-card/30 px-6 py-10 text-center text-sm text-muted-foreground">
+              暂无通知记录，票态发生变化后会显示在这里
+            </div>
+          ) : (
+            <div className="overflow-hidden rounded-2xl border border-white/8 bg-card/55">
+              {notifications.map((notification) => {
+                const status = {
+                  sent: {
+                    label: '已发送',
+                    icon: CheckCircle2,
+                    className: 'text-emerald-300',
+                  },
+                  skipped: {
+                    label: '未发送',
+                    icon: BellOff,
+                    className: 'text-amber-300',
+                  },
+                  failed: {
+                    label: '发送失败',
+                    icon: AlertCircle,
+                    className: 'text-primary',
+                  },
+                }[notification.status];
+                const StatusIcon = status.icon;
+
+                return (
+                  <article
+                    key={notification.id}
+                    className="grid gap-3 border-b border-white/8 px-5 py-4 last:border-b-0 sm:grid-cols-[1fr_auto] sm:items-center"
+                  >
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <a
+                          href={notification.sourceUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="truncate text-sm font-medium hover:text-primary"
+                        >
+                          {notification.name}
+                        </a>
+                        <Badge
+                          variant="outline"
+                          className="shrink-0 border-white/10 text-muted-foreground"
+                        >
+                          {notification.buttonText}
+                        </Badge>
+                      </div>
+                      <p className="mt-1 truncate text-xs text-muted-foreground">
+                        {notification.previousButtonText
+                          ? `${notification.previousButtonText} → ${notification.buttonText}`
+                          : notification.buttonText}
+                        {' · '}项目 #{notification.projectId}
+                        {notification.error ? ` · ${notification.error}` : ''}
+                      </p>
+                    </div>
+                    <div className="flex items-center justify-between gap-4 sm:justify-end">
+                      <span
+                        className={`flex items-center gap-1.5 text-xs font-medium ${status.className}`}
+                      >
+                        <StatusIcon className="size-3.5" />
+                        {status.label}
+                      </span>
+                      <time
+                        dateTime={notification.sentAt}
+                        className="min-w-28 text-right text-xs text-muted-foreground"
+                      >
+                        {formatTime(notification.sentAt)}
+                      </time>
                     </div>
                   </article>
                 );

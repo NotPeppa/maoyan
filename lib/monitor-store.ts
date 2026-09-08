@@ -18,6 +18,20 @@ export type MonitorRow = {
   lastError: string | null;
 };
 
+export type NotificationHistoryRow = {
+  id: number;
+  monitorId: number;
+  projectId: string;
+  name: string;
+  sourceUrl: string;
+  previousButtonText: string | null;
+  buttonText: string;
+  available: number;
+  sentAt: string;
+  status: 'sent' | 'skipped' | 'failed';
+  error: string | null;
+};
+
 const monitorSelect = `SELECT id, project_id AS projectId, source_url AS sourceUrl, name, venue,
   show_time AS showTime, button_text AS buttonText, sale_status AS saleStatus,
   ticket_status AS ticketStatus, available, last_checked_at AS lastCheckedAt,
@@ -33,6 +47,34 @@ export async function listMonitors(): Promise<MonitorRow[]> {
   return getDb()
     .prepare(`${monitorSelect} ORDER BY available DESC, created_at DESC`)
     .all() as MonitorRow[];
+}
+
+export async function listNotificationHistory(
+  limit = 50,
+): Promise<NotificationHistoryRow[]> {
+  const safeLimit = Math.min(Math.max(Math.trunc(limit), 1), 100);
+  return getDb()
+    .prepare(
+      `WITH history_with_previous AS (
+        SELECT *, LAG(button_text) OVER (
+          PARTITION BY monitor_id ORDER BY checked_at, id
+        ) AS previous_button_text
+        FROM status_history
+      )
+      SELECT history.id, history.monitor_id AS monitorId,
+        monitors.project_id AS projectId, monitors.name, monitors.source_url AS sourceUrl,
+        history.previous_button_text AS previousButtonText,
+        history.button_text AS buttonText, history.available,
+        history.checked_at AS sentAt, history.notification_status AS status,
+        history.notification_error AS error
+      FROM history_with_previous AS history
+      INNER JOIN monitors ON monitors.id = history.monitor_id
+      WHERE history.notification_status != 'skipped'
+        OR history.notification_error IS NOT NULL
+      ORDER BY history.checked_at DESC, history.id DESC
+      LIMIT ?`,
+    )
+    .all(safeLimit) as NotificationHistoryRow[];
 }
 
 export async function createMonitor(projectId: string, sourceUrl: string) {
@@ -145,8 +187,13 @@ export async function checkMonitor(id: number) {
           previousButtonText: change.previousButtonText,
         });
         db.prepare(
-          'UPDATE status_history SET notification_status = ? WHERE id = ?',
-        ).run(result.sent ? 'sent' : 'skipped', change.historyId);
+          `UPDATE status_history SET notification_status = ?, notification_error = ?
+          WHERE id = ?`,
+        ).run(
+          result.sent ? 'sent' : 'skipped',
+          result.sent ? null : result.reason,
+          change.historyId,
+        );
       } catch (error) {
         const message =
           error instanceof Error ? error.message : 'WxPusher 推送失败';
